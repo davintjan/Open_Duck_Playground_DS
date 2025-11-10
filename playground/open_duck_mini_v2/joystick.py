@@ -14,6 +14,9 @@
 # limitations under the License.
 # ==============================================================================
 """Joystick task for Open Duck Mini V2. (based on Berkeley Humanoid)"""
+"""
+This is where the environment for training is
+"""
 
 from typing import Any, Dict, Optional, Union
 import jax

@@ -41,9 +41,9 @@ class MjInfer(MJInferBase):
         self.COMMANDS_RANGE_Y = [-0.2, 0.2]
         self.COMMANDS_RANGE_THETA = [-1.0, 1.0]  # [-1.0, 1.0]
 
-        self.NECK_PITCH_RANGE = [-0.17, 0.5]
+        self.NECK_PITCH_RANGE = [-0.34, 1.1]
         self.HEAD_PITCH_RANGE = [-0.78, 0.78]
-        self.HEAD_YAW_RANGE = [-0.5, 0.5]
+        self.HEAD_YAW_RANGE = [-1.5, 1.5]
         self.HEAD_ROLL_RANGE = [-0.5, 0.5]
 
         self.last_action = np.zeros(self.num_dofs)
@@ -62,20 +62,6 @@ class MjInfer(MJInferBase):
         print(f"joint names: {self.joint_names}")
         print(f"actuator names: {self.actuator_names}")
         print(f"backlash joint names: {self.backlash_joint_names}")
-        # find actuator indices for head control (if present)
-        try:
-            self._head_actuator_indices = [
-                self.actuator_names.index(n) for n in [
-                    "neck_pitch",
-                    "head_pitch",
-                    "head_yaw",
-                    "head_roll",
-                ]
-            ]
-            print(self._head_actuator_indices)
-        except ValueError:
-            # some models (or variants) may not have those actuators; fall back to empty
-            self._head_actuator_indices = []
         # print(f"actual joints idx: {self.get_actual_joints_idx()}")
 
     def get_obs(
@@ -116,6 +102,13 @@ class MjInfer(MJInferBase):
 
         return obs
 
+    def pos_callback(self):
+        # get_floating_base_qpos expects a qpos array, not the full MjData object
+        full_position = self.get_floating_base_qpos(self.data.qpos)
+        t_floating = full_position[:3]
+        q_floating = full_position[3:]
+        return t_floating, q_floating
+
     def key_callback(self, keycode):
         print(f"key: {keycode}")
         if keycode == 72:  # h
@@ -132,29 +125,28 @@ class MjInfer(MJInferBase):
                 lin_vel_y = self.COMMANDS_RANGE_Y[1]
             if keycode == 262:  # arrow right
                 lin_vel_y = self.COMMANDS_RANGE_Y[0]
-            if keycode == 81:  # q
+            if keycode == 81:  # a
                 ang_vel = self.COMMANDS_RANGE_THETA[1]
             if keycode == 69:  # e
                 ang_vel = self.COMMANDS_RANGE_THETA[0]
             if keycode == 80:  # p
                 self.phase_frequency_factor += 0.1
-            if keycode == 59:  # ;
+            if keycode == 59:  # m
                 self.phase_frequency_factor -= 0.1
         else:
-            print("head_control_mode")
             neck_pitch = 0
             head_pitch = 0
             head_yaw = 0
             head_roll = 0
             if keycode == 265:  # arrow up
-                neck_pitch = self.NECK_PITCH_RANGE[1]
+                head_pitch = self.NECK_PITCH_RANGE[1]
             if keycode == 264:  # arrow down
-                neck_pitch = self.NECK_PITCH_RANGE[0]
+                head_pitch = self.NECK_PITCH_RANGE[0]
             if keycode == 263:  # arrow left
                 head_yaw = self.HEAD_YAW_RANGE[1]
             if keycode == 262:  # arrow right
                 head_yaw = self.HEAD_YAW_RANGE[0]
-            if keycode == 81:  # q
+            if keycode == 81:  # a
                 head_roll = self.HEAD_ROLL_RANGE[1]
             if keycode == 69:  # e
                 head_roll = self.HEAD_ROLL_RANGE[0]
@@ -183,8 +175,14 @@ class MjInfer(MJInferBase):
                     step_start = time.time()
 
                     mujoco.mj_step(self.model, self.data)
-
+                    
                     counter += 1
+
+                    t_base, q_base = self.pos_callback()
+                    print("translation")
+                    print(t_base)
+                    print("rotation")
+                    print(q_base)
 
                     if counter % self.decimation == 0:
                         if not self.standing:
@@ -241,12 +239,8 @@ class MjInfer(MJInferBase):
 
                             self.prev_motor_targets = self.motor_targets.copy()
 
-                        # If user is in head-control mode, override the head actuators
-                        # with the commands (neck_pitch, head_pitch, head_yaw, head_roll).
-                        if self.head_control_mode and len(self._head_actuator_indices) == 4:
-                            head_targets = np.array(self.commands[3:7])
-                            # assign directly to the actuators corresponding to head joints
-                            self.motor_targets[self._head_actuator_indices] = head_targets
+                        # head_targets = self.commands[3:]
+                        # self.motor_targets[5:9] = head_targets
                         self.data.ctrl = self.motor_targets.copy()
 
                     viewer.sync()
