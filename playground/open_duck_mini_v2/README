@@ -4,5 +4,7 @@ We call the key_callback to publish command
 To make it run to a certain position, we can bypass the key_callback and use a dynamical system
 
 1. Make it callback the position of the center and continuously print it [DONE]
-2. Create a DS in 2D space because we only care about the position of the goal 
-3. Based on the max value of lin vel in xy and q, we clip that DS output
+2. Create a DS in 2D space because we only care about the position of the goal [DONE]
+3. Based on the max value of lin vel in xy and q, we clip that DS output [DONE]
+4. Now do DS for quaternion
+5. Integrate to ROS

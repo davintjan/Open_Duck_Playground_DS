@@ -59,6 +59,11 @@ class MjInfer(MJInferBase):
 
         self.phase_frequency_factor = 1.0
 
+        self.K_DS = 1.0
+
+        self.curr_t = [0, 0, 0]
+        self.curr_q = [0, 0, 0]
+
         print(f"joint names: {self.joint_names}")
         print(f"actuator names: {self.actuator_names}")
         print(f"backlash joint names: {self.backlash_joint_names}")
@@ -102,63 +107,30 @@ class MjInfer(MJInferBase):
 
         return obs
 
+    def linear_DS(self, x_des, y_des):
+        curr_x = self.curr_t[0]
+        curr_y = self.curr_t[1]
+        # DS is a simple v = -k(x_curr-x_des)
+        x_vel = -self.K_DS * (curr_x - x_des)
+        y_vel = -self.K_DS * (curr_y - y_des)
+        # Clip it to the command value ranges
+        x_vel = np.clip(x_vel, self.COMMANDS_RANGE_X[0], self.COMMANDS_RANGE_X[1])
+        y_vel = np.clip(y_vel, self.COMMANDS_RANGE_Y[0], self.COMMANDS_RANGE_Y[1])
+        return x_vel, y_vel
+
     def pos_callback(self):
         # get_floating_base_qpos expects a qpos array, not the full MjData object
         full_position = self.get_floating_base_qpos(self.data.qpos)
-        t_floating = full_position[:3]
-        q_floating = full_position[3:]
-        return t_floating, q_floating
+        self.curr_t = full_position[:3]
+        self.curr_q = full_position[3:]
 
-    def key_callback(self, keycode):
-        print(f"key: {keycode}")
-        if keycode == 72:  # h
-            self.head_control_mode = not self.head_control_mode
-        lin_vel_x = 0
-        lin_vel_y = 0
-        ang_vel = 0
-        if not self.head_control_mode:
-            if keycode == 265:  # arrow up
-                lin_vel_x = self.COMMANDS_RANGE_X[1]
-            if keycode == 264:  # arrow down
-                lin_vel_x = self.COMMANDS_RANGE_X[0]
-            if keycode == 263:  # arrow left
-                lin_vel_y = self.COMMANDS_RANGE_Y[1]
-            if keycode == 262:  # arrow right
-                lin_vel_y = self.COMMANDS_RANGE_Y[0]
-            if keycode == 81:  # a
-                ang_vel = self.COMMANDS_RANGE_THETA[1]
-            if keycode == 69:  # e
-                ang_vel = self.COMMANDS_RANGE_THETA[0]
-            if keycode == 80:  # p
-                self.phase_frequency_factor += 0.1
-            if keycode == 59:  # m
-                self.phase_frequency_factor -= 0.1
-        else:
-            neck_pitch = 0
-            head_pitch = 0
-            head_yaw = 0
-            head_roll = 0
-            if keycode == 265:  # arrow up
-                head_pitch = self.NECK_PITCH_RANGE[1]
-            if keycode == 264:  # arrow down
-                head_pitch = self.NECK_PITCH_RANGE[0]
-            if keycode == 263:  # arrow left
-                head_yaw = self.HEAD_YAW_RANGE[1]
-            if keycode == 262:  # arrow right
-                head_yaw = self.HEAD_YAW_RANGE[0]
-            if keycode == 81:  # a
-                head_roll = self.HEAD_ROLL_RANGE[1]
-            if keycode == 69:  # e
-                head_roll = self.HEAD_ROLL_RANGE[0]
+    def set_target_position(self, x_des, y_des):
+        """Set the target position for the DS control"""
+        x_vel, y_vel = self.linear_DS(x_des, y_des)
+        self.commands[0] = x_vel
+        self.commands[1] = y_vel
+        self.commands[2] = 0.0  # No angular velocity for now
 
-            self.commands[3] = neck_pitch
-            self.commands[4] = head_pitch
-            self.commands[5] = head_yaw
-            self.commands[6] = head_roll
-
-        self.commands[0] = lin_vel_x
-        self.commands[1] = lin_vel_y
-        self.commands[2] = ang_vel
 
     def run(self):
         try:
@@ -166,8 +138,7 @@ class MjInfer(MJInferBase):
                 self.model,
                 self.data,
                 show_left_ui=False,
-                show_right_ui=False,
-                key_callback=self.key_callback,
+                show_right_ui=False
             ) as viewer:
                 counter = 0
                 while True:
@@ -178,11 +149,13 @@ class MjInfer(MJInferBase):
                     
                     counter += 1
 
-                    t_base, q_base = self.pos_callback()
+                    self.pos_callback()
+                    # Update target position using DS
+                    self.set_target_position(1.0, 0.5)  # Example fixed target
                     print("translation")
-                    print(t_base)
+                    print(self.curr_t)
                     print("rotation")
-                    print(q_base)
+                    print(self.curr_q)
 
                     if counter % self.decimation == 0:
                         if not self.standing:
