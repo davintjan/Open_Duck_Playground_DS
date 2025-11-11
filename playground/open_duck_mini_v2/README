@@ -8,3 +8,7 @@ To make it run to a certain position, we can bypass the key_callback and use a d
 3. Based on the max value of lin vel in xy and q, we clip that DS output [DONE]
 4. Now do DS for quaternion
 5. Integrate to ROS
+
+In the end, this robot should move with relative position (step by step). For example if we want to navigate a map where the robot has to go straight, the turn left, then turn right. The start origin will be 0, 0. Then after it reach the first point, the current position become 0, 0. Then turn right left and move w.r.t to the last belief. So on and so forth.
+
+Adding visuoservoing will be cool too.

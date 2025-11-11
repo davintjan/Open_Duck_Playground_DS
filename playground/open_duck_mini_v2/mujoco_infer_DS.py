@@ -4,6 +4,7 @@ import numpy as np
 import mujoco
 import mujoco.viewer
 import time
+from scipy.spatial.transform import Rotation, Slerp
 import argparse
 from playground.common.onnx_infer import OnnxInfer
 from playground.common.poly_reference_motion_numpy import PolyReferenceMotion
@@ -106,6 +107,52 @@ class MjInfer(MJInferBase):
         )
 
         return obs
+
+    def quat_DS(self, q, q_des):
+        # Expect q and q_des to be 4-element quaternions in the form [w, x, y, z]
+        q = np.array(q, dtype=float)
+        q_des = np.array(q_des, dtype=float)
+
+        # Normalize inputs to avoid drift/scale issues
+        if np.linalg.norm(q) == 0 or np.linalg.norm(q_des) == 0:
+            return np.zeros(3)
+        q = q / np.linalg.norm(q)
+        q_des = q_des / np.linalg.norm(q_des)
+
+        # Decompose into scalar (s) and vector (u) parts assuming q = [s, x, y, z]
+        s1, u1 = q[0], np.array(q[1:4])
+        s2, u2 = q_des[0], np.array(q_des[1:4])
+
+        # skew-symmetric matrix of u1
+        Su1 = np.array([[0, -u1[2], u1[1]],
+                        [u1[2], 0, -u1[0]],
+                        [-u1[1], u1[0], 0]])
+
+        # quaternion composition error (dori = q * conj(q_des) or similar depending on convention)
+        dori = np.array([s1 * s2 + u1 @ u2.T,
+                         *(-s1 * u2 + s2 * u1 - Su1 @ u2)])
+
+        v = np.array(dori[1:])
+        v_norm = np.linalg.norm(v)
+
+        # numeric safety for arccos domain
+        dori[0] = np.clip(dori[0], -1.0, 1.0)
+
+        # If the vector part is (almost) zero, the rotation difference is negligible
+        if v_norm <= 1e-6:
+            return np.zeros(3)
+
+        # log map of quaternion to axis-angle-like vector (rotation vector)
+        angle = np.arccos(dori[0])
+        logdq = angle * (v / v_norm)
+
+        orientation_error_rad = np.linalg.norm(logdq)
+        orientation_error_deg = np.degrees(orientation_error_rad)
+        # use print here (no rospy in this module)
+        print(f"Orientation error: {orientation_error_rad:.4f} rad | {orientation_error_deg:.2f} deg")
+
+        # Return angular velocity command (drive toward desired orientation)
+        return -self.K_DS * logdq
 
     def linear_DS(self, x_des, y_des):
         curr_x = self.curr_t[0]
