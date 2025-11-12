@@ -116,6 +116,12 @@ class MjInfer(MJInferBase):
 
         return obs
 
+    def pos_callback(self):
+        # get_floating_base_qpos expects a qpos array, not the full MjData object
+        full_position = self.get_floating_base_qpos(self.data.qpos)
+        self.curr_t = full_position[:3]
+        self.curr_q = full_position[3:]
+
     def key_callback(self, keycode):
         print(f"key: {keycode}")
         if keycode == 72:  # h
@@ -185,7 +191,11 @@ class MjInfer(MJInferBase):
                     mujoco.mj_step(self.model, self.data)
 
                     counter += 1
-
+                    self.pos_callback()
+                    print("translation")
+                    print(self.curr_t)
+                    print("rotation")
+                    print(self.curr_q)
                     if counter % self.decimation == 0:
                         if not self.standing:
                             self.imitation_i += 1.0 * self.phase_frequency_factor

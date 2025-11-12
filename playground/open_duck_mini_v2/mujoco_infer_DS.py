@@ -38,8 +38,8 @@ class MjInfer(MJInferBase):
 
         self.policy = OnnxInfer(onnx_model_path, awd=True)
 
-        self.COMMANDS_RANGE_X = [-0.15, 0.15]
-        self.COMMANDS_RANGE_Y = [-0.2, 0.2]
+        self.COMMANDS_RANGE_X = [-0.2, 0.2]
+        self.COMMANDS_RANGE_Y = [-0.15, 0.15]
         self.COMMANDS_RANGE_THETA = [-1.0, 1.0]  # [-1.0, 1.0]
 
         self.NECK_PITCH_RANGE = [-0.34, 1.1]
@@ -60,7 +60,7 @@ class MjInfer(MJInferBase):
 
         self.phase_frequency_factor = 1.0
 
-        self.K_DS = 1.0
+        self.K_DS = 3.0
 
         self.curr_t = [0, 0, 0]
         self.curr_q = [0, 0, 0]
@@ -108,51 +108,40 @@ class MjInfer(MJInferBase):
 
         return obs
 
-    def quat_DS(self, q, q_des):
-        # Expect q and q_des to be 4-element quaternions in the form [w, x, y, z]
+    def quat_DS(self, q, theta_des_deg):
+        # Expect q as quaternion [w, x, y, z]
+        # Expect q_des_deg as desired yaw in degrees
         q = np.array(q, dtype=float)
-        q_des = np.array(q_des, dtype=float)
 
-        # Normalize inputs to avoid drift/scale issues
-        if np.linalg.norm(q) == 0 or np.linalg.norm(q_des) == 0:
-            return np.zeros(3)
+        # Normalize quaternion
+        if np.linalg.norm(q) == 0:
+            return 0.0
         q = q / np.linalg.norm(q)
-        q_des = q_des / np.linalg.norm(q_des)
 
-        # Decompose into scalar (s) and vector (u) parts assuming q = [s, x, y, z]
-        s1, u1 = q[0], np.array(q[1:4])
-        s2, u2 = q_des[0], np.array(q_des[1:4])
+        # Decompose quaternion (w, x, y, z)
+        w, x, y, z = q
 
-        # skew-symmetric matrix of u1
-        Su1 = np.array([[0, -u1[2], u1[1]],
-                        [u1[2], 0, -u1[0]],
-                        [-u1[1], u1[0], 0]])
+        # Compute current yaw in degrees
+        siny_cosp = 2.0 * (w * z + x * y)
+        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+        yaw_curr_deg = np.degrees(np.arctan2(siny_cosp, cosy_cosp))
 
-        # quaternion composition error (dori = q * conj(q_des) or similar depending on convention)
-        dori = np.array([s1 * s2 + u1 @ u2.T,
-                         *(-s1 * u2 + s2 * u1 - Su1 @ u2)])
+        # Desired yaw in degrees
+        yaw_des_deg = float(theta_des_deg)
 
-        v = np.array(dori[1:])
-        v_norm = np.linalg.norm(v)
+        # Compute shortest angle difference in degrees [-180, 180]
+        diff_deg = yaw_des_deg - yaw_curr_deg
+        diff_deg = (diff_deg + 180) % 360 - 180
 
-        # numeric safety for arccos domain
-        dori[0] = np.clip(dori[0], -1.0, 1.0)
+        # Proportional DS on yaw error
+        yaw_cmd = self.K_DS * diff_deg
 
-        # If the vector part is (almost) zero, the rotation difference is negligible
-        if v_norm <= 1e-6:
-            return np.zeros(3)
+        # Clip to allowed command range (assumed in degrees)
+        yaw_cmd = np.clip(yaw_cmd, self.COMMANDS_RANGE_THETA[0], self.COMMANDS_RANGE_THETA[1])
 
-        # log map of quaternion to axis-angle-like vector (rotation vector)
-        angle = np.arccos(dori[0])
-        logdq = angle * (v / v_norm)
+        print(f"Yaw error: {diff_deg:.4f} deg -> yaw_cmd {yaw_cmd:.4f}")
 
-        orientation_error_rad = np.linalg.norm(logdq)
-        orientation_error_deg = np.degrees(orientation_error_rad)
-        # use print here (no rospy in this module)
-        print(f"Orientation error: {orientation_error_rad:.4f} rad | {orientation_error_deg:.2f} deg")
-
-        # Return angular velocity command (drive toward desired orientation)
-        return -self.K_DS * logdq
+        return float(yaw_cmd)
 
     def linear_DS(self, x_des, y_des):
         curr_x = self.curr_t[0]
@@ -160,9 +149,6 @@ class MjInfer(MJInferBase):
         # DS is a simple v = -k(x_curr-x_des)
         x_vel = -self.K_DS * (curr_x - x_des)
         y_vel = -self.K_DS * (curr_y - y_des)
-        # Clip it to the command value ranges
-        x_vel = np.clip(x_vel, self.COMMANDS_RANGE_X[0], self.COMMANDS_RANGE_X[1])
-        y_vel = np.clip(y_vel, self.COMMANDS_RANGE_Y[0], self.COMMANDS_RANGE_Y[1])
         return x_vel, y_vel
 
     def pos_callback(self):
@@ -171,13 +157,46 @@ class MjInfer(MJInferBase):
         self.curr_t = full_position[:3]
         self.curr_q = full_position[3:]
 
-    def set_target_position(self, x_des, y_des):
-        """Set the target position for the DS control"""
-        x_vel, y_vel = self.linear_DS(x_des, y_des)
-        self.commands[0] = x_vel
-        self.commands[1] = y_vel
-        self.commands[2] = 0.0  # No angular velocity for now
+    def set_target_position(self, x_des, y_des, theta_des=None):
 
+        # --- Linear DS control (in world frame) ---
+        x_vel_world, y_vel_world = self.linear_DS(x_des, y_des)
+
+        # --- Get current orientation (to transform into body frame) ---
+        q_curr = np.array(self.curr_q, dtype=float)
+        if np.linalg.norm(q_curr) == 0:
+            yaw_curr_deg = 0.0
+        else:
+            q_curr /= np.linalg.norm(q_curr)
+            w, x, y, z = q_curr
+            siny_cosp = 2.0 * (w * z + x * y)
+            cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+            yaw_curr_deg = np.degrees(np.arctan2(siny_cosp, cosy_cosp))
+
+        yaw_curr_rad = np.radians(yaw_curr_deg)
+
+        # --- Rotate world velocities into the robot (body) frame ---
+        v_body_x =  np.cos(yaw_curr_rad) * x_vel_world + np.sin(yaw_curr_rad) * y_vel_world
+        v_body_y = -np.sin(yaw_curr_rad) * x_vel_world + np.cos(yaw_curr_rad) * y_vel_world
+
+        v_body_x = np.clip(
+            v_body_x, self.COMMANDS_RANGE_X[0], self.COMMANDS_RANGE_X[1]
+        )
+        v_body_y = np.clip(
+            v_body_y, self.COMMANDS_RANGE_Y[0], self.COMMANDS_RANGE_Y[1]
+        )
+        # --- Assign to command vector (body frame: forward, sideways) ---
+        self.commands[0] = float(v_body_x)  # forward/backward
+        self.commands[1] = float(v_body_y)  # sideways
+        print("body frame commands:")
+        print(f"  forward/backward: {self.commands[0]:.4f}")
+        print(f"  sideways: {self.commands[1]:.4f}")
+        # --- Orientation DS (yaw control) ---
+        if theta_des is not None:
+            yaw_cmd = self.quat_DS(q_curr, theta_des)
+            self.commands[2] = float(yaw_cmd)
+        else:
+            self.commands[2] = 0.0
 
     def run(self):
         try:
@@ -198,7 +217,7 @@ class MjInfer(MJInferBase):
 
                     self.pos_callback()
                     # Update target position using DS
-                    self.set_target_position(1.0, 0.5)  # Example fixed target
+                    self.set_target_position(1.0, 2.5, 90.0)  # Example fixed target
                     print("translation")
                     print(self.curr_t)
                     print("rotation")

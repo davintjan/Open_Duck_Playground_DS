@@ -6,9 +6,14 @@ To make it run to a certain position, we can bypass the key_callback and use a d
 1. Make it callback the position of the center and continuously print it [DONE]
 2. Create a DS in 2D space because we only care about the position of the goal [DONE]
 3. Based on the max value of lin vel in xy and q, we clip that DS output [DONE]
-4. Now do DS for quaternion
-5. Integrate to ROS
+4. Now do DS for quaternion [DONE]
+5. Use the DS for command [DONE]
+6. Linear DS although produce X and Y, but it is not command, command 0 is just front back, command 1 is just left right wrt to wherever the robot is facing
+6. Integrate to ROS to publish topic
+7. Create LPVDS to create the duck that run in a lap
 
 In the end, this robot should move with relative position (step by step). For example if we want to navigate a map where the robot has to go straight, the turn left, then turn right. The start origin will be 0, 0. Then after it reach the first point, the current position become 0, 0. Then turn right left and move w.r.t to the last belief. So on and so forth.
+
+Basically task planner that create DS
 
 Adding visuoservoing will be cool too.
